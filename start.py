@@ -59,7 +59,7 @@ def _pick_problems():
     print("   [2] 指定区间（如 12-30）")
     print("   [3] 指定题目（如 JD027,JD029）")
     print("   [4] 只做前N题")
-    choice = input("  请选择 [1]: ").strip() or "1"
+    choice = input("  选择: ").strip() or "1"
 
     if choice == "1":
         return {"mode": "all"}
@@ -125,7 +125,7 @@ def main():
     print("   [2] C")
     print("   [3] Python3")
     print("   [4] Java")
-    lang_choice = input("  选择 [1]: ").strip() or "1"
+    lang_choice = input("  选择: ").strip() or "1"
     lang_map = {"1": "cpp", "2": "c", "3": "python", "4": "java"}
     config.language = lang_map.get(lang_choice, "cpp")
 
@@ -136,7 +136,7 @@ def main():
     print("   [1] 快速 (0.5s，有风险)")
     print("   [2] 正常 (3s，默认)")
     print("   [3] 安全 (8s，最保险)")
-    d_choice = input("  选择 [2]: ").strip() or "2"
+    d_choice = input("  选择: ").strip() or "2"
     delay_map = {"1": 0.5, "2": 3.0, "3": 8.0}
     config.delay_seconds = delay_map.get(d_choice, 3.0)
 
