@@ -47,7 +47,6 @@ def _ensure_env():
     print()
     config.username = input(f"  学号 [{config.username or '必填'}]: ").strip() or config.username
     config.password = input(f"  密码 [{_mask(config.password)}]: ").strip() or config.password
-    config.contest_password = input(f"  比赛密码 [{config.contest_password or 'ilovexmu'}]: ").strip() or config.contest_password or "ilovexmu"
 
     print()
     print("  AI 密钥（获取: platform.deepseek.com → API Keys）")
@@ -59,7 +58,7 @@ def _ensure_env():
     with open(env_path, 'w', encoding='utf-8') as f:
         f.write(f'XMUOJ_USERNAME={config.username}\n')
         f.write(f'XMUOJ_PASSWORD={config.password}\n')
-        f.write(f'XMUOJ_CONTEST_PASSWORD={config.contest_password}\n')
+        f.write(f'XMUOJ_CONTEST_PASSWORD={config.contest_password or "ilovexmu"}\n')
         if api_key:
             f.write(f'API_KEY={api_key}\n')
             f.write(f'API_BASE=https://api.deepseek.com/v1\n')
@@ -111,6 +110,14 @@ def main():
     cid = _extract_contest_id(raw)
     config.contest_id = cid
     print(f"  → 比赛 {cid}")
+
+    # 2.5 比赛密码
+    print()
+    pw = input(f"  输入比赛密码（默认为 ilovexmu，回车即可）: ").strip()
+    if pw:
+        config.contest_password = pw
+    elif not config.contest_password:
+        config.contest_password = "ilovexmu"
 
     # 3. 选题
     print()

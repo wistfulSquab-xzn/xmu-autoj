@@ -173,10 +173,59 @@ class AISolver:
             self._valid = False
 
     def validate(self) -> bool:
-        """Quick API connectivity test. Returns True if API key works."""
+        """Quick API connectivity test. Returns True if API key works.
+        If current provider fails, tries the other provider automatically."""
         if not self._client or not self._valid:
             print("[AI] API 未初始化，无法验证")
             return False
+
+        # Try current provider first
+        if self._try_validate():
+            return True
+
+        # If failed, try the other provider (endpoint may not match key type)
+        other = "anthropic" if self._provider == "openai" else "openai"
+        print(f"[AI] 当前端点失败，尝试 {other} 端点...")
+        old_provider = self._provider
+        self._provider = other
+        self._call_fn = self._call_anthropic if other == "anthropic" else self._call_openai
+
+        # Rebuild client with corrected base_url
+        api_key = (os.getenv("API_KEY", "") or os.getenv("DEEPSEEK_API_KEY", "") or
+                   os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
+        if other == "anthropic":
+            base_url = os.getenv("API_BASE", "").replace("/v1", "/anthropic")
+            if "/anthropic" not in base_url:
+                base_url = "https://api.deepseek.com/anthropic"
+            self._client = Anthropic(api_key=api_key, base_url=base_url)
+        else:
+            base_url = os.getenv("API_BASE", "").replace("/anthropic", "/v1")
+            if "/v1" not in base_url:
+                base_url = "https://api.deepseek.com/v1"
+            self._client = OpenAI(api_key=api_key, base_url=base_url)
+
+        if self._try_validate():
+            # Update .env with correct base_url for future runs
+            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+            if os.path.exists(env_path):
+                try:
+                    with open(env_path, 'r') as f:
+                        content = f.read()
+                    content = content.replace(
+                        f'API_BASE={os.getenv("API_BASE", "")}',
+                        f'API_BASE={base_url}'
+                    )
+                    with open(env_path, 'w') as f:
+                        f.write(content)
+                except Exception:
+                    pass
+            return True
+
+        self._provider = old_provider
+        return False
+
+    def _try_validate(self) -> bool:
+        """Single validation attempt."""
         try:
             if self._provider == "anthropic":
                 self._client.messages.create(
@@ -190,17 +239,11 @@ class AISolver:
                     max_tokens=5,
                     messages=[{"role": "user", "content": "hi"}],
                 )
-            print("[AI] API 连接验证通过")
+            print(f"[AI] {self._provider} 端点验证通过")
             return True
         except Exception as e:
             msg = str(e)
-            if "401" in msg or "403" in msg or "auth" in msg.lower() or "key" in msg.lower():
-                print(f"[AI] API Key 无效或已过期！")
-            elif "timeout" in msg.lower() or "connect" in msg.lower():
-                print(f"[AI] API 连接失败，请检查网络和 API_BASE 配置")
-            else:
-                print(f"[AI] API 验证失败: {msg[:200]}")
-            print("[AI] 请检查 .env 中的 API_KEY 和 API_BASE")
+            print(f"[AI] {self._provider} 端点失败: {msg[:150]}")
             return False
 
     # ================================================================
