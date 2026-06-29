@@ -124,6 +124,13 @@ Configuration:
                         help='Show browser window')
     parser.add_argument('--model', type=str, default=None,
                         help='AI model to use')
+    parser.add_argument('-l', '--language', type=str, default=None,
+                        choices=['cpp', 'c', 'python', 'java'],
+                        help='Output language: cpp, c, python, java (default: cpp)')
+    parser.add_argument('-d', '--delay', type=float, default=None,
+                        help='Base delay in seconds (default: 3, higher = safer)')
+    parser.add_argument('--fast', action='store_true',
+                        help='Minimal delay mode (risk of rate limit)')
     parser.add_argument('--limit', type=int, default=None,
                         help='Limit to first N problems (for testing)')
     parser.add_argument('--range', type=str, default=None,
@@ -141,6 +148,13 @@ Configuration:
         config.headless = False
     if args.model:
         config.ai_model = args.model
+    if args.language:
+        config.language = args.language
+    if args.fast:
+        config.delay_seconds = 0.5
+        config.poll_interval = 1.0
+    if args.delay is not None:
+        config.delay_seconds = args.delay
 
     # Parse range / problems filter
     problem_range = None

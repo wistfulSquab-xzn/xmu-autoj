@@ -5,6 +5,7 @@ Uses API-based submission (verified working) and Playwright for auth only.
 import asyncio
 import json
 import os
+import random
 import time
 import requests
 from dataclasses import dataclass, field
@@ -18,6 +19,13 @@ from ai_solver import AISolver, AIGeneratedCode
 
 
 requests.packages.urllib3.disable_warnings()
+
+
+def jitter(base: float, pct: float = 0.5) -> float:
+    """Add random jitter to a delay: base ± pct%"""
+    lo = base * (1 - pct)
+    hi = base * (1 + pct)
+    return max(0.5, random.uniform(lo, hi))
 
 
 @dataclass
@@ -48,7 +56,7 @@ class Orchestrator:
     def __init__(self):
         self.auth: Optional[XMUOJAuth] = None
         self.fetcher: Optional[ProblemFetcher] = None
-        self.solver = AISolver()
+        self.solver = AISolver(language=config.language)
         self.report = RunReport()
         self.api_session: Optional[requests.Session] = None
         self.csrf_token: str = ""
@@ -136,7 +144,7 @@ class Orchestrator:
                 print(f"  {status} | Score: {result.final_score} | Attempts: {len(result.attempts)}")
 
                 if i < len(problems) - 1:
-                    time.sleep(2)
+                    time.sleep(jitter(config.delay_seconds * 2))  # longer pause between problems
 
             # Phase 4: Aggregate results
             print(f"\n[4/5] Aggregating results...")
@@ -244,7 +252,7 @@ class Orchestrator:
             error_info['error'] += '\n' + self.solver.analyze_error(problem, error_info)
             previous_attempts.append(error_info)
 
-            time.sleep(2)
+            time.sleep(jitter(config.delay_seconds))
 
         # Set final state
         if attempt_record.attempts:
@@ -260,7 +268,7 @@ class Orchestrator:
             'problem_id': int(problem_id),
             'contest_id': config.contest_id,
             'code': code,
-            'language': 'C++',
+            'language': self.solver.submit_language,
         }
 
         r = self.api_session.post(
@@ -320,7 +328,7 @@ class Orchestrator:
             if score != last_score:
                 print(f"    (judging... score={score})")
                 last_score = score
-            time.sleep(2)
+            time.sleep(jitter(config.poll_interval))
 
         # Timeout - return whatever we have
         print("    (timeout)")

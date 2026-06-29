@@ -45,13 +45,14 @@ class XMUOJConfig:
     headless: bool = True
     browser_timeout: int = 60000
 
-    # Rate limiting
-    request_interval: float = 3.0
-    submit_cooldown: float = 5.0
+    # Rate limiting - be respectful to avoid bans
+    delay_seconds: float = 3.0       # Base delay between actions (0 = fastest, 5+ = stealth)
+    poll_interval: float = 2.0       # Judging result poll interval
 
     # AI solver
     max_retry_per_problem: int = 5
     ai_model: str = "deepseek-v4-pro"
+    language: str = "cpp"  # cpp, c, python, java
 
     # Output
     output_dir: str = "output"

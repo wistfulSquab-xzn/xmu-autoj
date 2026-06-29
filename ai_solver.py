@@ -1,16 +1,12 @@
 """
 XMUOJ AI Code Generator
-Uses DeepSeek V4 Pro via Anthropic-compatible API (CC Switch).
-Reads API credentials from Claude Code settings or environment variables.
+Supports OpenAI-compatible + Anthropic backends, multiple languages.
 """
-import json
-import os
-import re
-import time
+import json, os, re, time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
+from openai import OpenAI
 from anthropic import Anthropic
 from anthropic.types import Message
 
@@ -18,42 +14,58 @@ from config import config
 from fetcher import ProblemInfo
 
 
-@dataclass
-class AIGeneratedCode:
-    """AI-generated solution code."""
-    code: str = ""
-    language: str = "cpp"
-    confidence: float = 0.0
+LANG_CFG = {
+    "cpp": {
+        "name": "C++", "fence": "cpp", "submit": "C++",
+        "prompt": """You are a competitive programming expert. Write a correct C++ solution.
 
+## REQUIREMENTS:
+- C++17. #include <bits/stdc++.h>
+- Fast I/O: ios_base::sync_with_stdio(false); cin.tie(nullptr)
+- Use long long for values > 2^31
+- Brief inline comments
 
-class AISolver:
-    """
-    Generates code solutions using DeepSeek V4 Pro via Anthropic-compatible API.
-    API credentials are read from Claude Code's CC Switch configuration.
-    """
+## OUTPUT: ONLY ```cpp ... ``` block, nothing else.""",
+    },
+    "c": {
+        "name": "C", "fence": "c", "submit": "C",
+        "prompt": """You are a competitive programming expert. Write a correct C solution.
 
-    SYSTEM_PROMPT = """You are a competitive programming expert. You will be given a programming problem and must produce a correct solution in C++.
+## REQUIREMENTS:
+- C11. #include <stdio.h>, <stdlib.h>, <string.h>
+- scanf/printf for I/O. Use long long for large values
+- malloc/free for dynamic memory. Brief comments
 
-## CRITICAL REQUIREMENTS:
-1. Write the solution in C++ (C++17 standard)
-2. Include ALL necessary #include directives
-3. Use fast I/O: ios_base::sync_with_stdio(false), cin.tie(nullptr)
-4. Handle ALL edge cases carefully
-5. Use long long for large numbers (constraints > 2^31)
-6. Add brief inline comments explaining the algorithm
+## OUTPUT: ONLY ```c ... ``` block, nothing else.""",
+    },
+    "python": {
+        "name": "Python3", "fence": "python", "submit": "Python3",
+        "prompt": """You are a competitive programming expert. Write a correct Python 3 solution.
 
-## OUTPUT FORMAT:
-Respond with ONLY the C++ code wrapped in ```cpp ... ``` markers.
-NO explanations, NO analysis, NO text outside the code block.
+## REQUIREMENTS:
+- Python 3.8+. Use sys.stdin.readline() for fast input
+- sys.stdout.write() for fast output
+- Python int is arbitrary precision, no overflow issues
+- Avoid deep recursion, use iterative approach
+- Brief inline comments
 
-## ALGORITHM GUIDELINES:
-- First analyze constraints → choose appropriate O() complexity
-- For OI-style problems, partial scoring matters
-- Consider edge cases: empty input, single element, large values, negative numbers
-- Use standard library: sort, binary_search, lower_bound, vector, map, set, queue, etc.
-"""
+## OUTPUT: ONLY ```python ... ``` block, nothing else.""",
+    },
+    "java": {
+        "name": "Java", "fence": "java", "submit": "Java",
+        "prompt": """You are a competitive programming expert. Write a correct Java solution.
 
-    RETRY_PROMPT = """Your previous solution was judged:
+## REQUIREMENTS:
+- Java 11+. Public class named Main
+- BufferedReader + InputStreamReader for fast input
+- BufferedWriter/StringBuilder for fast output. Avoid Scanner
+- Use long for values > 2^31. Brief comments
+
+## OUTPUT: ONLY ```java ... ``` block, nothing else.""",
+    },
+}
+
+RETRY_PROMPT = """Your previous solution was judged:
 
 **Status:** {status}
 **Details:** {error}
@@ -62,326 +74,253 @@ The problem:
 
 {problem_text}
 
-Fix the issues and provide a CORRECTED solution.
+Fix the issues and provide a CORRECTED solution in **{lang_name}**.
 
-Common causes by status:
-- Wrong Answer: logic error, missed edge case, wrong data type, off-by-one
-- Time Limit Exceeded: O() too slow, optimize algorithm, remove unnecessary work
-- Runtime Error: array bounds, division by zero, null pointer, stack overflow
-- Compile Error: syntax error, missing #include, C++ version mismatch
+Output ONLY the corrected code in ```{lang} ... ``` markers."""
 
-Output ONLY the corrected C++ code in ```cpp ... ``` markers."""
 
-    def __init__(self):
+@dataclass
+class AIGeneratedCode:
+    code: str = ""
+    language: str = "cpp"
+    confidence: float = 0.0
+
+
+class AISolver:
+    """Generates solutions via OpenAI-compatible or Anthropic API."""
+
+    def __init__(self, language: str = None):
+        self._lang = language or config.language
+        if self._lang not in LANG_CFG:
+            print(f"[AI] Unknown language '{self._lang}', fallback to cpp")
+            self._lang = "cpp"
+        self._cfg = LANG_CFG[self._lang]
+
         self.solutions_dir = os.path.join(config.output_dir, "solutions")
         self.prompts_dir = os.path.join(config.output_dir, "prompts")
         self.responses_dir = os.path.join(config.output_dir, "responses")
+        self._provider = None
+        self._client = None
+        self._init_client()
+
+    @property
+    def language(self) -> str:
+        return self._lang
+
+    @property
+    def submit_language(self) -> str:
+        return self._cfg["submit"]
 
     def _ensure_dirs(self):
-        """Ensure output directories exist (called before each use)."""
         os.makedirs(self.solutions_dir, exist_ok=True)
         os.makedirs(self.prompts_dir, exist_ok=True)
         os.makedirs(self.responses_dir, exist_ok=True)
 
-        # Initialize API client from Claude Code settings
-        self.client = self._init_client()
+    def _init_client(self):
+        api_key = (os.getenv("API_KEY", "") or
+                   os.getenv("DEEPSEEK_API_KEY", "") or
+                   os.getenv("ANTHROPIC_AUTH_TOKEN", "") or
+                   os.getenv("OPENAI_API_KEY", ""))
+        base_url = (os.getenv("API_BASE", "") or
+                    os.getenv("DEEPSEEK_BASE_URL", "") or
+                    os.getenv("ANTHROPIC_BASE_URL", "") or
+                    os.getenv("OPENAI_BASE_URL", ""))
+        provider = os.getenv("API_PROVIDER", "").lower()
+        model = os.getenv("API_MODEL", "") or config.ai_model
 
-    def _init_client(self) -> Optional[Anthropic]:
-        """Initialize API client. Reads credentials from multiple sources.
-
-        Priority: env vars > .env file > Claude Code settings.json
-        Supports two key name formats:
-          - DEEPSEEK_API_KEY (recommended for standalone use)
-          - ANTHROPIC_AUTH_TOKEN (used by Claude Code CC Switch)
-        """
-        # Try multiple key/env names
-        api_key = os.getenv("DEEPSEEK_API_KEY", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
-        base_url = os.getenv("DEEPSEEK_BASE_URL", "") or os.getenv("ANTHROPIC_BASE_URL", "")
-
-        # If base_url not set, default to DeepSeek's Anthropic-compatible endpoint
-        if api_key and not base_url:
-            base_url = "https://api.deepseek.com/anthropic"
-
-        # Fallback: Claude Code settings.json
-        if not api_key or not base_url:
-            settings_path = os.path.join(
-                os.path.expanduser("~"), ".claude", "settings.json"
-            )
+        if not api_key:
+            settings_path = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
             if os.path.exists(settings_path):
                 try:
-                    with open(settings_path, 'r') as f:
-                        settings = json.load(f)
-                    cc_env = settings.get('env', {})
-                    if not api_key:
-                        api_key = cc_env.get('ANTHROPIC_AUTH_TOKEN', '')
-                    if not base_url:
-                        base_url = cc_env.get('ANTHROPIC_BASE_URL', '')
+                    with open(settings_path) as f:
+                        cc_env = json.load(f).get('env', {})
+                    api_key = cc_env.get('ANTHROPIC_AUTH_TOKEN', '')
+                    base_url = base_url or cc_env.get('ANTHROPIC_BASE_URL', '')
                 except Exception:
                     pass
 
-        if api_key:
-            print(f"[AI] API ready: {base_url}")
-            return Anthropic(api_key=api_key, base_url=base_url)
+        if not api_key:
+            print("[AI] 未找到 API 密钥！请在 .env 中设置 API_KEY=sk-xxx")
+            return
 
-        print("[AI] 未找到 AI 密钥！请在 .env 中添加:")
-        print("     DEEPSEEK_API_KEY=sk-你的密钥")
-        print("     获取地址: https://platform.deepseek.com")
-        return None
+        if not provider:
+            provider = "anthropic" if "anthropic" in (base_url or "").lower() else "openai"
+
+        if provider == "openai" and "/anthropic" in (base_url or ""):
+            base_url = base_url.replace("/anthropic", "/v1")
+        elif provider == "anthropic" and "/v1" in (base_url or "") and "/anthropic" not in (base_url or ""):
+            base_url = base_url.replace("/v1", "/anthropic")
+
+        if not base_url:
+            base_url = "https://api.deepseek.com/v1" if provider == "openai" else "https://api.deepseek.com/anthropic"
+        if not model:
+            model = "deepseek-v4-pro"
+
+        try:
+            if provider == "anthropic":
+                self._client = Anthropic(api_key=api_key, base_url=base_url)
+                self._call_fn = self._call_anthropic
+            else:
+                self._client = OpenAI(api_key=api_key, base_url=base_url)
+                self._call_fn = self._call_openai
+            self._provider = provider
+            print(f"[AI] {provider} | {base_url} | {model} | {self._cfg['name']}")
+        except Exception as e:
+            print(f"[AI] Init failed: {e}")
+
+    # ================================================================
+    #  Public
+    # ================================================================
 
     def generate_solution(self, problem: ProblemInfo,
                           previous_attempts: list = None) -> Optional[AIGeneratedCode]:
-        """
-        Generate a solution for a problem.
-        Uses API if available, falls back to file-based protocol.
-        """
         self._ensure_dirs()
         if previous_attempts is None:
             previous_attempts = []
 
         is_retry = len(previous_attempts) > 0
-
         if is_retry:
-            last_attempt = previous_attempts[-1]
-            prompt = self.RETRY_PROMPT.format(
-                status=last_attempt.get('status', 'Unknown'),
-                error=last_attempt.get('error', 'No details'),
+            last = previous_attempts[-1]
+            prompt = RETRY_PROMPT.format(
+                status=last.get('status', 'Unknown'),
+                error=last.get('error', 'No details'),
                 problem_text=problem.to_prompt_text(),
+                lang_name=self._cfg["name"],
+                lang=self._cfg["fence"],
             )
         else:
-            prompt = f"{self.SYSTEM_PROMPT}\n\n## Problem:\n\n{problem.to_prompt_text()}"
+            prompt = f"{self._cfg['prompt']}\n\n## Problem:\n\n{problem.to_prompt_text()}"
 
         suffix = 'retry' if is_retry else 'initial'
-        print(f"[AI] {'Retrying' if is_retry else 'Generating'} problem #{problem.problem_id}...")
+        print(f"[AI] {'Retrying' if is_retry else 'Generating'} #{problem.problem_id} ({self._cfg['name']})...")
 
-        # Save prompt
-        prompt_file = os.path.join(
-            self.solutions_dir,
-            f"problem_{problem.problem_id}_prompt_{suffix}.txt"
-        )
+        prompt_file = os.path.join(self.solutions_dir,
+                                   f"problem_{problem.problem_id}_prompt_{suffix}.txt")
         with open(prompt_file, 'w', encoding='utf-8') as f:
             f.write(prompt)
 
-        # Generate code
-        code = None
-        if self.client:
-            code = self._call_api(prompt)
-        else:
-            code = self._call_file_based(prompt, problem.problem_id)
-
+        code = self._call_fn(prompt) if self._client else self._call_file_based(prompt, problem.problem_id)
         if not code:
-            print("[AI] FAILED to generate solution!")
+            print("[AI] FAILED")
             return None
 
-        # Clean and save
         code = self._clean_code(code)
-
         attempt_num = len(previous_attempts) + 1
-        code_file = os.path.join(
-            self.solutions_dir,
-            f"problem_{problem.problem_id}_attempt_{attempt_num}.cpp"
-        )
+        code_file = os.path.join(self.solutions_dir,
+                                 f"problem_{problem.problem_id}_attempt_{attempt_num}.{self._cfg['fence']}")
         with open(code_file, 'w', encoding='utf-8') as f:
             f.write(code)
-        print(f"[AI] Solution saved ({len(code)} chars)")
+        print(f"[AI] Saved ({len(code)} chars)")
 
-        return AIGeneratedCode(code=code, language='cpp')
+        return AIGeneratedCode(code=code, language=self._lang)
 
-    def _call_api(self, prompt: str, retry_count: int = 0) -> Optional[str]:
-        """Call DeepSeek V4 Pro via Anthropic Messages API.
-        Handles thinking-block-only responses by retrying with higher max_tokens.
-        """
+    # ================================================================
+    #  OpenAI backend
+    # ================================================================
+
+    def _call_openai(self, prompt: str, retry: int = 0) -> Optional[str]:
         try:
-            max_tokens = 4096 + retry_count * 2048  # Increase on retry
-            print(f"[AI] Calling DeepSeek API (max_tokens={max_tokens})...")
-            response: Message = self.client.messages.create(
-                model=config.ai_model,
-                max_tokens=max_tokens,
-                temperature=0.2,
-                system="You are a competitive programming expert. Output ONLY C++ code in ```cpp fences.",
+            max_tokens = 4096 + retry * 2048
+            resp = self._client.chat.completions.create(
+                model=os.getenv("API_MODEL", "") or config.ai_model,
                 messages=[
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": f"Output ONLY {self._cfg['name']} code in ```{self._cfg['fence']} fences."},
+                    {"role": "user", "content": prompt},
                 ],
+                max_tokens=max_tokens, temperature=0.2,
             )
-
-            # Extract text from response (DeepSeek may include ThinkingBlock)
-            text_blocks = [b for b in response.content if b.type == 'text']
-            if not text_blocks:
-                if retry_count < 2:
-                    print(f"[AI] Thinking-only response, retrying with more tokens (retry {retry_count+1})...")
-                    return self._call_api(prompt, retry_count + 1)
-                print("[AI] No text in response after retries")
-                return None
-            output = text_blocks[0].text
-            print(f"[AI] API returned {len(output)} chars")
-
+            output = resp.choices[0].message.content or ""
             code = self._extract_code(output)
             if code:
                 return code
-
-            # If code extraction failed but we got output, it might be raw code
-            if '#include' in output and 'int main' in output:
-                start = output.find('#include')
-                end = output.rfind('}')
-                if start >= 0 and end > start:
-                    return output[start:end+1].strip()
-
-            print("[AI] Could not extract valid code from API response")
+            if retry < 2:
+                return self._call_openai(prompt, retry + 1)
             return None
-
         except Exception as e:
-            print(f"[AI] API error: {e}")
+            print(f"[AI] OpenAI error: {e}")
             return None
+
+    # ================================================================
+    #  Anthropic backend
+    # ================================================================
+
+    def _call_anthropic(self, prompt: str, retry: int = 0) -> Optional[str]:
+        try:
+            max_tokens = 4096 + retry * 2048
+            resp: Message = self._client.messages.create(
+                model=os.getenv("API_MODEL", "") or config.ai_model,
+                max_tokens=max_tokens, temperature=0.2,
+                system=f"Output ONLY {self._cfg['name']} code in ```{self._cfg['fence']} fences.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text_blocks = [b for b in resp.content if b.type == 'text']
+            if not text_blocks:
+                if retry < 2:
+                    return self._call_anthropic(prompt, retry + 1)
+                return None
+            code = self._extract_code(text_blocks[0].text)
+            if code:
+                return code
+            if retry < 2:
+                return self._call_anthropic(prompt, retry + 1)
+            return None
+        except Exception as e:
+            print(f"[AI] Anthropic error: {e}")
+            return None
+
+    # ================================================================
+    #  Utilities
+    # ================================================================
 
     def _call_file_based(self, prompt: str, problem_id: str) -> Optional[str]:
-        """
-        File-based protocol for interactive mode.
-        Writes prompt to file and polls for response.
-        Use AISolver.provide_solution() to respond from Claude Code session.
-        """
         prompt_path = os.path.join(self.prompts_dir, f"{problem_id}.txt")
-        response_path = os.path.join(self.responses_dir, f"{problem_id}.cpp")
+        response_path = os.path.join(self.responses_dir, f"{problem_id}.{self._cfg['fence']}")
         status_path = os.path.join(self.responses_dir, f"{problem_id}.status")
-
-        # Write prompt
         with open(prompt_path, 'w', encoding='utf-8') as f:
             f.write(prompt)
         with open(status_path, 'w') as f:
             f.write('pending')
-
-        print(f"[AI] Prompt → {prompt_path}")
-        print(f"[AI] Waiting for response (max 10 min)...")
-
-        max_wait = 600
-        poll_interval = 3
-        waited = 0
-
-        while waited < max_wait:
+        for _ in range(200):
             if os.path.exists(status_path):
-                with open(status_path, 'r') as f:
-                    status = f.read().strip()
-                if status == 'done' and os.path.exists(response_path):
-                    with open(response_path, 'r', encoding='utf-8') as f:
-                        code = f.read()
-                    print(f"[AI] Response received ({len(code)} chars)")
-                    os.unlink(status_path)
-                    return code
-                elif status == 'error':
-                    print("[AI] Generation reported error")
-                    return None
-
-            time.sleep(poll_interval)
-            waited += poll_interval
-            if waited % 30 == 0:
-                print(f"[AI] Still waiting... ({waited}s)")
-
-        print(f"[AI] Timeout ({max_wait}s)")
+                with open(status_path) as f:
+                    if f.read().strip() == 'done' and os.path.exists(response_path):
+                        with open(response_path, encoding='utf-8') as f:
+                            return f.read()
+            time.sleep(3)
         return None
 
-    def write_pending_prompts(self, problems: list[ProblemInfo]):
-        """Write all problem prompts to files for batch processing."""
-        for problem in problems:
-            prompt = f"{self.SYSTEM_PROMPT}\n\n## Problem:\n\n{problem.to_prompt_text()}"
-            prompt_path = os.path.join(self.prompts_dir, f"{problem.problem_id}.txt")
-            with open(prompt_path, 'w', encoding='utf-8') as f:
-                f.write(prompt)
-            print(f"[AI] Prepared: problem #{problem.problem_id}")
-
-    @staticmethod
-    def provide_solution(problem_id: str, code: str):
-        """Provide a solution from Claude Code session to the file-based protocol."""
-        responses_dir = os.path.join(config.output_dir, "responses")
-        os.makedirs(responses_dir, exist_ok=True)
-
-        response_path = os.path.join(responses_dir, f"{problem_id}.cpp")
-        status_path = os.path.join(responses_dir, f"{problem_id}.status")
-
-        with open(response_path, 'w', encoding='utf-8') as f:
-            f.write(code)
-        with open(status_path, 'w') as f:
-            f.write('done')
-
-        print(f"[AI] Solution for #{problem_id} written to {response_path}")
-
-    @staticmethod
-    def mark_error(problem_id: str, error: str = "Generation failed"):
-        """Mark a problem as failed for the file-based protocol."""
-        responses_dir = os.path.join(config.output_dir, "responses")
-        os.makedirs(responses_dir, exist_ok=True)
-
-        status_path = os.path.join(responses_dir, f"{problem_id}.status")
-        with open(status_path, 'w') as f:
-            f.write(f'error: {error}')
-
     def _extract_code(self, output: str) -> Optional[str]:
-        """Extract code block from AI output."""
-        # Try ```cpp ... ``` first
-        match = re.search(r'```(?:cpp|c\+\+|c)\s*\n(.*?)\n\s*```', output, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-
-        # Try ``` ... ```
-        match = re.search(r'```\s*\n(.*?)\n\s*```', output, re.DOTALL)
-        if match:
-            code = match.group(1).strip()
-            if '#include' in code or 'int main' in code or 'public class' in code:
+        fence = self._cfg["fence"]
+        # Try language-specific fence
+        m = re.search(rf'```(?:{fence})\s*\n(.*?)\n\s*```', output, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+        # Try generic fence
+        m = re.search(r'```\s*\n(.*?)\n\s*```', output, re.DOTALL)
+        if m:
+            code = m.group(1).strip()
+            # Quick check: does it look like code?
+            if any(kw in code for kw in ['#include', 'int main', 'def ', 'import', 'public class', 'printf', 'scanf']):
                 return code
-
         return None
 
     def _clean_code(self, code: str) -> str:
-        """Clean up generated code."""
-        # Remove text before first #include
-        include_pos = code.find('#include')
-        if include_pos > 0:
-            # Check if there's non-comment text before #include
-            before = code[:include_pos].strip()
-            if before and not before.startswith('//'):
-                code = code[include_pos:]
-
-        # Remove trailing non-code text
         lines = code.split('\n')
         while lines and not lines[-1].strip():
             lines.pop()
         return '\n'.join(lines).strip()
 
     def analyze_error(self, problem: ProblemInfo, error_info: dict) -> str:
-        """Analyze judging error and provide debug guidance."""
         status = error_info.get('status', 'Unknown')
-        error_msg = error_info.get('error', '')
-
+        msg = error_info.get('error', '')
         if 'Wrong Answer' in status:
-            return (
-                "WRONG ANSWER: The output is incorrect.\n"
-                "- Verify algorithm correctness on ALL edge cases\n"
-                "- Check input parsing (whitespace, newlines)\n"
-                "- Verify output format matches exactly\n"
-                "- Consider overflow with large values → use long long\n"
-                "- Double-check boundary conditions"
-            )
+            return "WRONG ANSWER: Check algorithm, edge cases, overflow, I/O format."
         elif 'Time Limit' in status:
-            return (
-                "TIME LIMIT EXCEEDED: Algorithm too slow.\n"
-                "- Analyze: can you reduce from O(n²) to O(n log n)?\n"
-                "- Use fast I/O: sync_with_stdio(false)\n"
-                "- Avoid unnecessary copies, use references\n"
-                "- Consider more efficient data structures"
-            )
+            return "TLE: Optimize complexity; use fast I/O."
         elif 'Runtime Error' in status:
-            return (
-                "RUNTIME ERROR: Program crashed.\n"
-                "- Check array index bounds (especially with 0-indexed vs 1-indexed)\n"
-                "- Division by zero?\n"
-                "- Recursion too deep? Use iterative approach\n"
-                "- Null pointer or uninitialized variable?"
-            )
+            return "RUNTIME ERROR: Check array bounds, null pointers, division by zero."
         elif 'Compile Error' in status:
-            return f"COMPILE ERROR:\n{error_msg}\n- Check syntax and includes"
+            return f"COMPILE ERROR: {msg}"
         elif 'Memory Limit' in status:
-            return (
-                "MEMORY LIMIT EXCEEDED: Too much memory used.\n"
-                "- Use more memory-efficient structures\n"
-                "- Consider streaming/on-the-fly processing\n"
-                "- Watch for unnecessary copies of large data"
-            )
-
-        return f"Status: {status}\n{error_msg}"
+            return "MLE: Reduce memory usage."
+        return f"{status}: {msg}"
