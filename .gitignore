@@ -3,4 +3,5 @@ output/
 .env
 *.pyc
 *.zip
+!xmuoj_auto.zip
 .DS_Store
