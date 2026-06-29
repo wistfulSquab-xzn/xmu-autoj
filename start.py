@@ -26,18 +26,27 @@ def _ensure_env():
         config.password = os.getenv("XMUOJ_PASSWORD", "")
         config.contest_password = os.getenv("XMUOJ_CONTEST_PASSWORD", "")
         if config.username and config.password:
-            return
+            print(f"  当前用户: {config.username}")
+            chg = input("  修改凭据? [y/N]: ").strip().lower()
+            if chg != 'y':
+                return
+        # Fall through to re-enter credentials
+        print()
 
+    if not os.path.exists(env_path):
+        print("  首次使用 - 设置凭据")
     print()
-    print("  首次使用 - 设置凭据（只需一次）")
-    print()
-    config.username = input("  学号: ").strip()
-    config.password = input("  密码: ").strip()
-    config.contest_password = input("  比赛密码 [ilovexmu]: ").strip() or "ilovexmu"
+    config.username = input("  学号: ").strip() or config.username
+    config.password = input("  密码: ").strip() or config.password
+    config.contest_password = input(f"  比赛密码 [{config.contest_password or 'ilovexmu'}]: ").strip() or config.contest_password or "ilovexmu"
 
     print()
     print("  AI 密钥（DeepSeek: platform.deepseek.com → API Keys）")
-    api_key = input("  API Key [sk-...]: ").strip()
+    current_key = os.getenv("API_KEY", "")
+    masked = current_key[:7] + "***" + current_key[-4:] if len(current_key) > 10 else ("(未设置)" if not current_key else current_key)
+    api_key = input(f"  API Key [{masked}]: ").strip()
+    if not api_key:
+        api_key = current_key
 
     with open(env_path, 'w', encoding='utf-8') as f:
         f.write(f'XMUOJ_USERNAME={config.username}\n')
