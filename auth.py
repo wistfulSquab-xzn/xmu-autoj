@@ -83,25 +83,31 @@ class XMUOJAuth:
         # Navigate to homepage (SPA entry point)
         print("[Auth] Loading homepage...")
         await self.page.goto(config.base_url, wait_until='domcontentloaded')
-        await asyncio.sleep(5)
 
-        # Click login button on the navbar
-        # The login button text is "登录" (Chinese), class: ivu-btn ivu-btn-ghost ivu-btn-circle
-        print("[Auth] Opening login modal...")
-        login_btn = await self._find_element([
-            'button:has-text("登录")',
-            'button.ivu-btn-ghost',
-            'button.ivu-btn-circle',
-        ])
+        # Wait for SPA to render (Vue.js needs time to bootstrap)
+        print("[Auth] Waiting for SPA to render...")
+        login_btn = None
+        for attempt in range(10):
+            await asyncio.sleep(2)
+            login_btn = await self._find_element([
+                'button:has-text("登录")',
+                'button.ivu-btn-ghost',
+                'button.ivu-btn-circle',
+            ])
+            if login_btn:
+                break
+            print(f"    waiting... ({attempt+1})")
 
         if not login_btn:
-            # Try clicking any small button in the header area
+            # Fallback: try any button in header
             header_btns = await self.page.query_selector_all('header button, nav button, .ivu-layout-header button')
             if header_btns:
                 login_btn = header_btns[0]
 
         if not login_btn:
             print("[Auth] ERROR: Cannot find login button!")
+            await self.page.screenshot(path=os.path.join(config.output_dir, 'auth_error.png'))
+            print("[Auth] Screenshot saved to output/auth_error.png")
             return False
 
         await login_btn.click()
