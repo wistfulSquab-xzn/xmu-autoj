@@ -292,21 +292,27 @@ class Orchestrator:
     def _poll_result(self, submission_id: str, max_wait: int = 60) -> dict:
         """Poll for submission result via API.
         XMUOJ result codes:
-          -1 = Waiting/Pending (keep polling)
-           0 = Accepted
-           1 = Wrong Answer (or other non-AC)
-           2 = Time Limit Exceeded
-           3 = Memory Limit Exceeded
-           4 = Runtime Error
-           5 = System Error
-           6 = Compile Error (or Intermediate state - keep polling if score changes)
-           7 = Judging/Running (keep polling)
+          -1 = Pending/Waiting
+           0 = Accepted (FINAL)
+           1 = Wrong Answer (FINAL)
+           2 = Time Limit Exceeded (FINAL)
+           3 = Memory Limit Exceeded (FINAL)
+           4 = Runtime Error (FINAL)
+           5 = System Error (FINAL)
+           6 = Compiling → Compile Error (may be intermediate!)
+           7 = Running/Judging (intermediate)
         """
-        FINAL_CODES = {0, 1, 2, 3, 4, 5, 6}  # Codes that indicate judging is done
-        INTERMEDIATE = {-1, 7, 8}  # Codes that mean still judging
+        # These are truly final - won't change
+        TRULY_FINAL = {0, 1, 2, 3, 4, 5}
+        # These are always intermediate
+        INTERMEDIATE = {-1, 7, 8}
+        # result=6 is ambiguous: could be "Compiling" (intermediate)
+        # or "Compile Error" (final). Need extra checks.
 
         start = time.time()
-        last_score = -1
+        last_result = None
+        stable_since = 0
+
         while time.time() - start < max_wait:
             r = self.api_session.get(
                 f'{config.base_url}/api/submission?id={submission_id}',
@@ -315,22 +321,52 @@ class Orchestrator:
             data = r.json().get('data', {})
             result_code = data.get('result', -1)
             score = data.get('statistic_info', {}).get('score', 0)
+            info_err = data.get('info', {}).get('err')
+            info_data = data.get('info', {}).get('data')
 
-            # If we have a final result and it's not changing...
-            if result_code is not None and result_code not in INTERMEDIATE:
-                # Check if still updating (score may increase)
-                if result_code == 6 and score == 0 and data.get('info', {}).get('data'):
-                    # Result 6 with test data = might be done, verify
-                    pass
+            # Truly final → return immediately
+            if result_code in TRULY_FINAL:
+                print(f"    (result={result_code}, score={score})")
                 return data
 
-            # Still judging
-            if score != last_score:
-                print(f"    (judging... score={score})")
-                last_score = score
+            # Still intermediate → keep polling
+            if result_code in INTERMEDIATE:
+                if score != last_result:
+                    print(f"    (judging... score={score})")
+                    last_result = score
+                time.sleep(jitter(config.poll_interval))
+                continue
+
+            # result=6: need to distinguish "still compiling" vs "compile error"
+            if result_code == 6:
+                # Real compile error: info.err has a message
+                if info_err:
+                    print(f"    (compile error detected)")
+                    return data
+                # Has test results → might be a weird state, check if stable
+                if info_data and len(info_data) > 0:
+                    # Check if this state is stable (same result for 3 polls)
+                    state_key = (result_code, score, len(info_data))
+                    if state_key == last_result:
+                        stable_since += 1
+                        if stable_since >= 3:
+                            print(f"    (result=6 stable, treating as final)")
+                            return data
+                    else:
+                        stable_since = 0
+                        last_result = state_key
+                        print(f"    (compiling... test_cases={len(info_data)})")
+                else:
+                    print(f"    (compiling...)")
+
+                time.sleep(jitter(config.poll_interval))
+                continue
+
+            # Unknown code → wait and see
+            print(f"    (unknown result={result_code})")
             time.sleep(jitter(config.poll_interval))
 
-        # Timeout - return whatever we have
+        # Timeout
         print("    (timeout)")
         r = self.api_session.get(
             f'{config.base_url}/api/submission?id={submission_id}',
