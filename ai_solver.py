@@ -101,6 +101,7 @@ class AISolver:
         self.responses_dir = os.path.join(config.output_dir, "responses")
         self._provider = None
         self._client = None
+        self._valid = True
         self._init_client()
 
     @property
@@ -141,6 +142,7 @@ class AISolver:
 
         if not api_key:
             print("[AI] 未找到 API 密钥！请在 .env 中设置 API_KEY=sk-xxx")
+            self._valid = False
             return
 
         if not provider:
@@ -164,9 +166,42 @@ class AISolver:
                 self._client = OpenAI(api_key=api_key, base_url=base_url)
                 self._call_fn = self._call_openai
             self._provider = provider
+            self._valid = True
             print(f"[AI] {provider} | {base_url} | {model} | {self._cfg['name']}")
         except Exception as e:
             print(f"[AI] Init failed: {e}")
+            self._valid = False
+
+    def validate(self) -> bool:
+        """Quick API connectivity test. Returns True if API key works."""
+        if not self._client or not self._valid:
+            print("[AI] API 未初始化，无法验证")
+            return False
+        try:
+            if self._provider == "anthropic":
+                self._client.messages.create(
+                    model=os.getenv("API_MODEL", "") or config.ai_model,
+                    max_tokens=5,
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            else:
+                self._client.chat.completions.create(
+                    model=os.getenv("API_MODEL", "") or config.ai_model,
+                    max_tokens=5,
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            print("[AI] API 连接验证通过")
+            return True
+        except Exception as e:
+            msg = str(e)
+            if "401" in msg or "403" in msg or "auth" in msg.lower() or "key" in msg.lower():
+                print(f"[AI] API Key 无效或已过期！")
+            elif "timeout" in msg.lower() or "connect" in msg.lower():
+                print(f"[AI] API 连接失败，请检查网络和 API_BASE 配置")
+            else:
+                print(f"[AI] API 验证失败: {msg[:200]}")
+            print("[AI] 请检查 .env 中的 API_KEY 和 API_BASE")
+            return False
 
     # ================================================================
     #  Public

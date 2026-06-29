@@ -57,6 +57,12 @@ class Orchestrator:
         self.auth: Optional[XMUOJAuth] = None
         self.fetcher: Optional[ProblemFetcher] = None
         self.solver = AISolver(language=config.language)
+        if not self.solver._valid:
+            print("\n" + "=" * 60)
+            print("  FATAL: AI 接口未就绪，无法继续")
+            print("  请检查 .env 中的 API_KEY 和 API_BASE")
+            print("=" * 60)
+            return self.report
         self.report = RunReport()
         self.api_session: Optional[requests.Session] = None
         self.csrf_token: str = ""
@@ -88,6 +94,14 @@ class Orchestrator:
                 print("FATAL: Contest access failed!")
                 return self.report
             print("[1/5] OK")
+
+            # Validate AI API before doing any work
+            print("\n[AI Check] Verifying API connectivity...")
+            if not self.solver.validate():
+                print("\n" + "=" * 60)
+                print("  API 验证失败，已停止。请检查密钥后重试。")
+                print("=" * 60)
+                return self.report
 
             # Setup API session with cookies from browser
             cookies = await self.auth.get_cookies_for_requests()
