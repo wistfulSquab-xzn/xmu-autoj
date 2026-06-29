@@ -1,0 +1,9 @@
+__pycache__/
+output/
+.env
+*.pyc
+cookies.json
+*.zip
+.vscode/
+.idea/
+.DS_Store
