@@ -33,16 +33,21 @@ def main():
         if not check_pip_pkg(pkg, imp):
             ok = False
 
-    # Check Playwright browser
+    # Check Playwright browser (use Chinese mirror for faster download)
     try:
         from playwright.sync_api import sync_playwright
         p = sync_playwright().start()
         try:
             p.chromium.launch()
         except Exception:
-            print("  Downloading browser (~180MB)...")
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
-                         capture_output=True)
+            print("  Downloading browser (~180MB, using mirror)...")
+            # Use npmmirror (Chinese CDN) for faster download
+            env = os.environ.copy()
+            env["PLAYWRIGHT_DOWNLOAD_HOST"] = "https://npmmirror.com/mirrors/playwright/"
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                capture_output=True, env=env
+            )
         finally:
             p.stop()
     except Exception as e:
