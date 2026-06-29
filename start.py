@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""
-XMUOJ 自动答题 - 双击 启动.bat 即可
-"""
+"""XMUOJ 自动答题 - 双击 启动.bat 即可"""
 import os, sys, asyncio, re
 
 from config import config
 from orchestrator import Orchestrator
+
+
+def _mask(s: str) -> str:
+    if not s: return "(未设置)"
+    if len(s) <= 6: return "*" * len(s)
+    return s[:3] + "***" + s[-3:]
 
 
 def _extract_contest_id(raw: str) -> int:
@@ -26,25 +30,29 @@ def _ensure_env():
         config.password = os.getenv("XMUOJ_PASSWORD", "")
         config.contest_password = os.getenv("XMUOJ_CONTEST_PASSWORD", "")
         if config.username and config.password:
-            print(f"  当前用户: {config.username}")
-            chg = input("  修改凭据? [y/N]: ").strip().lower()
-            if chg != 'y':
+            api = os.getenv("API_KEY", "")
+            print(f"  用户: {config.username}")
+            print(f"  密码: {_mask(config.password)}")
+            print(f"  API Key: {_mask(api)}")
+            print(f"  是否修改以上凭据?")
+            print(f"  [1] 不修改（默认选项，回车即可）")
+            print(f"  [2] 修改")
+            chg = input("  选择: ").strip()
+            if chg != "2":
                 return
-        # Fall through to re-enter credentials
         print()
 
     if not os.path.exists(env_path):
         print("  首次使用 - 设置凭据")
     print()
-    config.username = input("  学号: ").strip() or config.username
-    config.password = input("  密码: ").strip() or config.password
+    config.username = input(f"  学号 [{config.username or '必填'}]: ").strip() or config.username
+    config.password = input(f"  密码 [{_mask(config.password)}]: ").strip() or config.password
     config.contest_password = input(f"  比赛密码 [{config.contest_password or 'ilovexmu'}]: ").strip() or config.contest_password or "ilovexmu"
 
     print()
-    print("  AI 密钥（DeepSeek: platform.deepseek.com → API Keys）")
+    print("  AI 密钥（获取: platform.deepseek.com → API Keys）")
     current_key = os.getenv("API_KEY", "")
-    masked = current_key[:7] + "***" + current_key[-4:] if len(current_key) > 10 else ("(未设置)" if not current_key else current_key)
-    api_key = input(f"  API Key [{masked}]: ").strip()
+    api_key = input(f"  API Key [{_mask(current_key)}]: ").strip()
     if not api_key:
         api_key = current_key
 
@@ -57,17 +65,16 @@ def _ensure_env():
             f.write(f'API_BASE=https://api.deepseek.com/v1\n')
             f.write(f'API_MODEL=deepseek-v4-pro\n')
 
-    print(f"  已保存 ✓")
+    print("  已保存")
     print()
 
 
 def _pick_problems():
-    """选题方式"""
     print("  选题方式:")
-    print("   [1] 全部题目")
-    print("   [2] 指定区间（如 12-30）")
-    print("   [3] 指定题目（如 JD027,JD029）")
-    print("   [4] 只做前N题")
+    print("  [1] 全部题目 (默认选项，回车即可)")
+    print("  [2] 指定区间（如 12-30）")
+    print("  [3] 指定题目（如 JD027,JD029）")
+    print("  [4] 只做前N题")
     choice = input("  选择: ").strip() or "1"
 
     if choice == "1":
@@ -77,9 +84,8 @@ def _pick_problems():
         parts = r.split("-")
         if len(parts) == 2:
             return {"mode": "range", "start": int(parts[0]), "end": int(parts[1])}
-        else:
-            print("  格式错误，使用全部题目")
-            return {"mode": "all"}
+        print("  格式错误，使用全部题目")
+        return {"mode": "all"}
     elif choice == "3":
         ids = input("  题目ID，逗号分隔 (如 JD027,JD029,7318): ").strip()
         return {"mode": "ids", "ids": [p.strip() for p in ids.split(",") if p.strip()]}
@@ -110,10 +116,7 @@ def main():
     print()
     parsed = _pick_problems()
 
-    problem_range = None
-    problem_ids = None
-    limit = None
-
+    problem_range = None; problem_ids = None; limit = None
     if parsed["mode"] == "all":
         desc = "全部"
     elif parsed["mode"] == "range":
@@ -128,26 +131,22 @@ def main():
 
     # 4. 语言
     print()
-    print("  ──────────────────────────────")
     print("  输出语言:")
-    print("   [1] C++ (默认)")
-    print("   [2] C")
-    print("   [3] Python3")
-    print("   [4] Java")
+    print("  [1] C++ (默认选项，回车即可)")
+    print("  [2] C")
+    print("  [3] Python3")
+    print("  [4] Java")
     lang_choice = input("  选择: ").strip() or "1"
-    lang_map = {"1": "cpp", "2": "c", "3": "python", "4": "java"}
-    config.language = lang_map.get(lang_choice, "cpp")
+    config.language = {"1": "cpp", "2": "c", "3": "python", "4": "java"}.get(lang_choice, "cpp")
 
-    # 5. 延时设置
+    # 5. 延时
     print()
-    print("  ──────────────────────────────")
     print("  延时设置（防封号）:")
-    print("   [1] 快速 (0.5s，有风险)")
-    print("   [2] 正常 (3s，默认)")
-    print("   [3] 安全 (8s，最保险)")
+    print("  [1] 快速 (0.5s，有风险)")
+    print("  [2] 正常 (3s，默认选项，回车即可)")
+    print("  [3] 安全 (8s)")
     d_choice = input("  选择: ").strip() or "2"
-    delay_map = {"1": 0.5, "2": 3.0, "3": 8.0}
-    config.delay_seconds = delay_map.get(d_choice, 3.0)
+    config.delay_seconds = {"1": 0.5, "2": 3.0, "3": 8.0}.get(d_choice, 3.0)
 
     # 6. 确认
     lang_names = {"cpp": "C++", "c": "C", "python": "Python3", "java": "Java"}
@@ -157,16 +156,14 @@ def main():
     print(f"  比赛 {cid} | {lang_names.get(config.language, config.language)} | {desc}")
     print(f"  延时 {delay_names.get(config.delay_seconds, str(config.delay_seconds))} | 重试{config.max_retry_per_problem}次")
     print()
-    ok = input("  回车开始: ").strip().lower()
-    if ok and ok not in ('y', 'yes'):
+    ok = input("  回车开始 [Enter]: ").strip().lower()
+    if ok and ok not in ('y', 'yes', ''):
         print("  已取消")
         return
 
     # 7. 开跑
     asyncio.run(Orchestrator().run(
-        limit=limit,
-        problem_range=problem_range,
-        problem_ids=problem_ids,
+        limit=limit, problem_range=problem_range, problem_ids=problem_ids,
     ))
 
 
