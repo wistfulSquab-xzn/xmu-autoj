@@ -132,11 +132,17 @@ class ProblemFetcher:
         try:
             r = self.session.get(url, timeout=15)
             if r.status_code != 200:
-                print(f"[Fetcher] API error: {r.status_code}")
+                print(f"[Fetcher] API error: {r.status_code} {r.text[:200]}")
                 return []
 
             data = r.json()
             if data.get('error'):
+                print(f"[Fetcher] API error: {data.get('data', '')[:200]}")
+                return []
+
+            if not isinstance(data.get('data'), list):
+                print(f"[Fetcher] Unexpected response: {str(data.get('data', ''))[:200]}")
+                return []
                 print(f"[Fetcher] API error: {data['error']}")
                 return []
 

@@ -93,6 +93,11 @@ class Orchestrator:
             if not await self.auth.access_contest(config.contest_id):
                 print("FATAL: Contest access failed!")
                 return self.report
+            # Refresh cookies after contest password verification
+            cookies = await self.auth.get_cookies_for_requests()
+            self.api_session.cookies.update(cookies)
+            self.csrf_token = cookies.get('csrftoken', '')
+            self.api_session.headers.update({'X-CSRFToken': self.csrf_token})
             print("[1/5] OK")
 
             # Validate AI API before doing any work
