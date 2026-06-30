@@ -166,10 +166,12 @@ class ProblemFetcher:
 
             return problems
         except Exception as e:
-            print(f"[Fetcher] Error: {e}")
-            # Print raw response for debugging
+            import traceback
+            tb = traceback.extract_tb(e.__traceback__)
+            where = f"line {tb[-1].lineno}" if tb else "unknown"
+            print(f"[Fetcher] Error at {where}: {e}")
             try:
-                print(f"  Raw response: {r.text[:300]}")
+                print(f"  Raw: {r.text[:300]}")
             except:
                 pass
             return []
