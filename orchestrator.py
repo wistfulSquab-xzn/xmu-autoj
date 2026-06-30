@@ -93,20 +93,7 @@ class Orchestrator:
             if not await self.auth.access_contest(config.contest_id):
                 print("FATAL: Contest access failed!")
                 return self.report
-            # Refresh cookies after contest password verification
-            cookies = await self.auth.get_cookies_for_requests()
-            self.api_session.cookies.update(cookies)
-            self.csrf_token = cookies.get('csrftoken', '')
-            self.api_session.headers.update({'X-CSRFToken': self.csrf_token})
             print("[1/5] OK")
-
-            # Validate AI API before doing any work
-            print("\n[AI Check] Verifying API connectivity...")
-            if not self.solver.validate():
-                print("\n" + "=" * 60)
-                print("  API 验证失败，已停止。请检查密钥后重试。")
-                print("=" * 60)
-                return self.report
 
             # Setup API session with cookies from browser
             cookies = await self.auth.get_cookies_for_requests()
@@ -119,6 +106,14 @@ class Orchestrator:
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
             })
+
+            # Validate AI API before doing any work
+            print("\n[AI Check] Verifying API connectivity...")
+            if not self.solver.validate():
+                print("\n" + "=" * 60)
+                print("  API 验证失败，已停止。请检查密钥后重试。")
+                print("=" * 60)
+                return self.report
 
             # Phase 2: Fetch problems via API
             print("\n[2/5] Fetching problems...")

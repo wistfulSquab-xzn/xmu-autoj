@@ -54,8 +54,12 @@ class ProblemInfo:
         # Extract first sample for easy access
         if problem.samples:
             first = problem.samples[0]
-            problem.sample_input = first.get('input', '')
-            problem.sample_output = first.get('output', '')
+            if isinstance(first, dict):
+                problem.sample_input = first.get('input', '')
+                problem.sample_output = first.get('output', '')
+            elif isinstance(first, str):
+                problem.sample_input = first
+                problem.sample_output = '(see sample above)'
 
         return problem
 
@@ -137,17 +141,22 @@ class ProblemFetcher:
 
             data = r.json()
             if data.get('error'):
-                print(f"[Fetcher] API error: {data.get('data', '')[:200]}")
+                err_data = data.get('data', '')
+                print(f"[Fetcher] API error: {str(err_data)[:200]}")
                 return []
 
-            if not isinstance(data.get('data'), list):
-                print(f"[Fetcher] Unexpected response: {str(data.get('data', ''))[:200]}")
-                return []
-                print(f"[Fetcher] API error: {data['error']}")
+            problems_data = data.get('data')
+            if not isinstance(problems_data, list):
+                print(f"[Fetcher] Unexpected: {str(problems_data)[:200]}")
                 return []
 
-            problems_data = data.get('data', [])
-            problems = [ProblemInfo.from_api(p) for p in problems_data]
+            problems = []
+            for i, p in enumerate(problems_data):
+                try:
+                    if isinstance(p, dict):
+                        problems.append(ProblemInfo.from_api(p))
+                except Exception as e:
+                    print(f"[Fetcher] Skip problem #{p.get('id','?') if isinstance(p,dict) else '?'}: {e}")
 
             print(f"[Fetcher] Found {len(problems)} problems in contest {contest_id}")
             for p in problems[:5]:
@@ -158,6 +167,11 @@ class ProblemFetcher:
             return problems
         except Exception as e:
             print(f"[Fetcher] Error: {e}")
+            # Print raw response for debugging
+            try:
+                print(f"  Raw response: {r.text[:300]}")
+            except:
+                pass
             return []
 
     async def get_problem_detail(self, problem_id: str, contest_id: int = None) -> ProblemInfo:
