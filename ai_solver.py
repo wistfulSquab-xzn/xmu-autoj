@@ -6,10 +6,6 @@ import json, os, re, time
 from dataclasses import dataclass
 from typing import Optional
 
-from openai import OpenAI
-from anthropic import Anthropic
-from anthropic.types import Message
-
 from config import config
 from fetcher import ProblemInfo
 
@@ -160,9 +156,11 @@ class AISolver:
 
         try:
             if provider == "anthropic":
+                from anthropic import Anthropic
                 self._client = Anthropic(api_key=api_key, base_url=base_url)
                 self._call_fn = self._call_anthropic
             else:
+                from openai import OpenAI
                 self._client = OpenAI(api_key=api_key, base_url=base_url)
                 self._call_fn = self._call_openai
             self._provider = provider
@@ -325,7 +323,7 @@ class AISolver:
     def _call_anthropic(self, prompt: str, retry: int = 0) -> Optional[str]:
         try:
             max_tokens = 4096 + retry * 2048
-            resp: Message = self._client.messages.create(
+            resp = self._client.messages.create(
                 model=os.getenv("API_MODEL", "") or config.ai_model,
                 max_tokens=max_tokens, temperature=0.2,
                 system=f"Output ONLY {self._cfg['name']} code in ```{self._cfg['fence']} fences.",
