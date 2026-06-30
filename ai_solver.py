@@ -192,11 +192,13 @@ class AISolver:
         api_key = (os.getenv("API_KEY", "") or os.getenv("DEEPSEEK_API_KEY", "") or
                    os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
         if other == "anthropic":
+            from anthropic import Anthropic
             base_url = os.getenv("API_BASE", "").replace("/v1", "/anthropic")
             if "/anthropic" not in base_url:
                 base_url = "https://api.deepseek.com/anthropic"
             self._client = Anthropic(api_key=api_key, base_url=base_url)
         else:
+            from openai import OpenAI
             base_url = os.getenv("API_BASE", "").replace("/anthropic", "/v1")
             if "/v1" not in base_url:
                 base_url = "https://api.deepseek.com/v1"
@@ -241,7 +243,12 @@ class AISolver:
             return True
         except Exception as e:
             msg = str(e)
-            print(f"[AI] {self._provider} 端点失败: {msg[:150]}")
+            if "402" in msg or "Insufficient" in msg or "insufficient" in msg:
+                print(f"[AI] API 余额不足，请充值！")
+            elif "401" in msg or "403" in msg:
+                print(f"[AI] API Key 无效")
+            else:
+                print(f"[AI] {self._provider} 端点失败: {msg[:150]}")
             return False
 
     # ================================================================
