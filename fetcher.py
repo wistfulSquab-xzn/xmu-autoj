@@ -48,7 +48,7 @@ class ProblemInfo:
             memory_limit=str(data.get('memory_limit', '')),
             source=data.get('source', ''),
             tags=data.get('tags', []),
-            samples=data.get('samples', []),
+            samples=ProblemInfo._normalize_samples(data.get('samples', [])),
         )
 
         # Extract first sample for easy access
@@ -83,14 +83,28 @@ class ProblemInfo:
         # List all samples
         for i, sample in enumerate(self.samples, 1):
             parts.append(f"### Sample {i}:")
-            parts.append(f"Input:\n{sample.get('input', '')}")
-            parts.append(f"Output:\n{sample.get('output', '')}")
+            if isinstance(sample, dict):
+                parts.append(f"Input:\n{sample.get('input', '')}")
+                parts.append(f"Output:\n{sample.get('output', '')}")
+            elif isinstance(sample, str):
+                parts.append(sample)
             parts.append("")
 
         if self.hint:
             parts.append(f"### Hint:\n{self.hint}\n")
 
         return '\n'.join(parts)
+
+    @staticmethod
+    def _normalize_samples(raw: list) -> list:
+        """Convert all sample entries to dicts. Some OJ versions store strings."""
+        result = []
+        for s in raw:
+            if isinstance(s, dict):
+                result.append(s)
+            elif isinstance(s, str):
+                result.append({"input": s, "output": ""})
+        return result
 
     @staticmethod
     def _clean_html(html: str) -> str:
