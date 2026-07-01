@@ -62,19 +62,15 @@ class XMUOJAuth:
                 with open(self._cookies_path, 'r') as f:
                     cookies = json.load(f)
                 await self.context.add_cookies(cookies)
-                # Use a shorter timeout for cookie validation
-                await self.page.goto(config.base_url, timeout=15000)
+                await self.page.goto(config.base_url, wait_until='domcontentloaded', timeout=15000)
                 await asyncio.sleep(3)
-                # Check if logged in
                 login_btn = await self.page.query_selector('button:has-text("登录")')
                 if not login_btn:
-                    print("[Auth] Cookies valid — already logged in!")
-                    cookie_login_ok = True
+                    print("[Auth] Cookies valid - already logged in!")
                     return True
                 print("[Auth] Cookies expired, re-logging in...")
             except Exception as e:
                 print(f"[Auth] Cookie load failed ({e}), doing fresh login...")
-                # Delete bad cookies file
                 try:
                     os.remove(self._cookies_path)
                 except:
